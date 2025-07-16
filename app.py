@@ -4,6 +4,7 @@ import numpy as np
 import requests
 from xml.etree import ElementTree as ET
 import os
+import pickle
 
 app = Flask(__name__)
 
@@ -12,13 +13,17 @@ print("Starting Flask application...")
 
 # Загрузка модели
 try:
-    model = joblib.load('model/flat_price_model.pkl')
+    with open('model/flat_price_model.pkl', 'rb') as f:
+        model = joblib.load(f)
     print("Model loaded successfully")
 except FileNotFoundError as e:
     print(f"Error: Model file 'model/flat_price_model.pkl' not found: {e}")
     raise
+except pickle.UnpicklingError as e:
+    print(f"Error: Failed to unpickle model file: {e}")
+    raise
 except Exception as e:
-    print(f"Error loading model: {e}")
+    print(f"Error loading model: {type(e).__name__}: {e}")
     raise
 
 # Резервный курс доллара к рублю
