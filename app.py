@@ -1,0 +1,103 @@
+from flask import Flask, render_template, request
+import joblib
+import numpy as np
+import requests
+from xml.etree import ElementTree as ET
+
+app = Flask(__name__)
+
+# Загрузка модели
+model = joblib.load('model/flat_price_model.pkl')
+
+# Резервный курс доллара к рублю (на 16 июля 2025)
+DEFAULT_USD_TO_RUB = 78.37
+
+
+def get_usd_to_rub_exchange_rate():
+    """Получение текущего курса USD/RUB от ЦБ РФ"""
+    try:
+        response = requests.get('http://www.cbr.ru/scripts/XML_daily.asp')
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        for valute in root.findall(".//Valute[@ID='R01235']"):
+            value = float(valute.find('Value').text.replace(',', '.'))
+            return value
+        return DEFAULT_USD_TO_RUB
+    except (requests.RequestException, ET.ParseError, ValueError) as e:
+        print(f"Ошибка при получении курса: {e}. Используется резервный курс {DEFAULT_USD_TO_RUB}")
+        return DEFAULT_USD_TO_RUB
+
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    prediction = None
+    error = None
+    form_data = {}  # Для сохранения введенных данных
+
+    if request.method == 'POST':
+        try:
+            # Получение данных из формы
+            form_data = {
+                'totsp': request.form.get('totsp', ''),
+                'livesp': request.form.get('livesp', ''),
+                'kitsp': request.form.get('kitsp', ''),
+                'dist': request.form.get('dist', ''),
+                'metrdist': request.form.get('metrdist', ''),
+                'walk': request.form.get('walk', '1'),
+                'brick': request.form.get('brick', '1'),
+                'floor': request.form.get('floor', '1')
+            }
+
+            # Попытка преобразования в числа
+            totsp = float(form_data['totsp'])
+            livesp = float(form_data['livesp'])
+            kitsp = float(form_data['kitsp'])
+            dist = float(form_data['dist'])
+            metrdist = float(form_data['metrdist'])
+            walk = int(form_data['walk'])
+            brick = int(form_data['brick'])
+            floor = int(form_data['floor'])
+
+            # Валидация данных
+            if totsp <= 0:
+                error = "Общая площадь должна быть положительным числом"
+            elif livesp <= 0:
+                error = "Жилая площадь должна быть положительным числом"
+            elif kitsp <= 0:
+                error = "Площадь кухни должна быть положительным числом"
+            elif dist <= 0:
+                error = "Расстояние до центра должно быть положительным числом"
+            elif metrdist < 0:
+                error = "Расстояние до метро не может быть отрицательным"
+            elif walk not in [0, 1]:
+                error = "Некорректное значение для 'Можно дойти до метро пешком'"
+            elif brick not in [0, 1]:
+                error = "Некорректное значение для 'Кирпичный дом'"
+            elif floor not in [0, 1]:
+                error = "Некорректное значение для 'Не первый этаж'"
+            elif livesp > totsp:
+                error = "Жилая площадь не может быть больше общей площади"
+            elif kitsp > totsp:
+                error = "Площадь кухни не может быть больше общей площади"
+            else:
+                # Формирование массива признаков
+                features = np.array([[totsp, livesp, kitsp, dist, metrdist, walk, brick, floor]])
+
+                # Предсказание в тысячах долларов
+                prediction_usd = model.predict(features)[0]
+
+                # Получение текущего курса
+                usd_to_rub = get_usd_to_rub_exchange_rate()
+
+                # Конвертация в миллионы рублей
+                prediction_mln_rub = (prediction_usd * usd_to_rub) / 1000
+                prediction = round(prediction_mln_rub, 2)
+
+        except ValueError:
+            error = "Пожалуйста, введите корректные числовые значения для всех полей"
+
+    return render_template('index.html', prediction=prediction, error=error, form_data=form_data)
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
