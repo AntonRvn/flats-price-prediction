@@ -7,11 +7,18 @@ import os
 
 app = Flask(__name__)
 
+# Логирование для отладки
+print("Starting Flask application...")
+
 # Загрузка модели
 try:
     model = joblib.load('model/flat_price_model.pkl')
-except FileNotFoundError:
-    print("Ошибка: файл модели 'model/flat_price_model.pkl' не найден")
+    print("Model loaded successfully")
+except FileNotFoundError as e:
+    print(f"Error: Model file 'model/flat_price_model.pkl' not found: {e}")
+    raise
+except Exception as e:
+    print(f"Error loading model: {e}")
     raise
 
 # Резервный курс доллара к рублю
@@ -19,27 +26,31 @@ DEFAULT_USD_TO_RUB = 78.37
 
 
 def get_usd_to_rub_exchange_rate():
-    """Получение текущего курса USD/RUB от ЦБ РФ"""
+    print("Fetching USD/RUB exchange rate...")
     try:
         response = requests.get('http://www.cbr.ru/scripts/XML_daily.asp', timeout=10)
         response.raise_for_status()
         root = ET.fromstring(response.content)
         for valute in root.findall(".//Valute[@ID='R01235']"):
             value = float(valute.find('Value').text.replace(',', '.'))
+            print(f"Exchange rate fetched: {value}")
             return value
+        print("USD not found in API response, using default rate")
         return DEFAULT_USD_TO_RUB
     except (requests.RequestException, ET.ParseError, ValueError) as e:
-        print(f"Ошибка при получении курса: {e}. Используется резервный курс {DEFAULT_USD_TO_RUB}")
+        print(f"Error fetching exchange rate: {e}. Using default rate {DEFAULT_USD_TO_RUB}")
         return DEFAULT_USD_TO_RUB
 
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    print("Handling request to /")
     prediction = None
     error = None
     form_data = {}
 
     if request.method == 'POST':
+        print("Received POST request")
         try:
             form_data = {
                 'totsp': request.form.get('totsp', ''),
@@ -51,6 +62,7 @@ def index():
                 'brick': request.form.get('brick', '1'),
                 'floor': request.form.get('floor', '1')
             }
+            print(f"Form data: {form_data}")
 
             totsp = float(form_data['totsp'])
             livesp = float(form_data['livesp'])
@@ -61,6 +73,7 @@ def index():
             brick = int(form_data['brick'])
             floor = int(form_data['floor'])
 
+            print("Validating input...")
             if totsp <= 0:
                 error = "Общая площадь должна быть положительным числом"
             elif livesp <= 0:
@@ -82,18 +95,23 @@ def index():
             elif kitsp > totsp:
                 error = "Площадь кухни не может быть больше общей площади"
             else:
+                print("Input validated, making prediction...")
                 features = np.array([[totsp, livesp, kitsp, dist, metrdist, walk, brick, floor]])
                 prediction_usd = model.predict(features)[0]
                 usd_to_rub = get_usd_to_rub_exchange_rate()
                 prediction_mln_rub = (prediction_usd * usd_to_rub) / 1000
                 prediction = round(prediction_mln_rub, 2)
+                print(f"Prediction: {prediction} млн руб")
 
         except ValueError:
             error = "Пожалуйста, введите корректные числовые значения для всех полей"
+            print(f"Validation error: {error}")
 
+    print("Rendering template...")
     return render_template('index.html', prediction=prediction, error=error, form_data=form_data)
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))
+    print(f"Running Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
